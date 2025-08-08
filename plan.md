@@ -1,188 +1,116 @@
-# План разработки: Android-приложение для выключения Ubuntu по локальной сети
+Проект: Shoutdowner — добавить "включение ПК" через Magic Packet (Wake-on-LAN)
 
-Коротко: делаем стильное Android-приложение (Jetpack Compose), которое по нажатию кнопки подключается к твоему Ubuntu по SSH и выполняет команду выключения. Всё безопасно — поддержка ключей и зашифрованного хранилища, экран настроек для host/user/auth, подтверждение перед выключением. Ниже подробный план задач, архитектура, зависимости и инструкции по Ubuntu.
+Цель
+- Добавить в приложение возможность отправлять Magic Packet (Wake-on-LAN), чтобы включать заранее настроенный компьютер в локальной сети.
 
-Тон — неформальный, но по делу. Если хочешь, могу после этого сделать саму реализацию по шагам.
+Коротко (для ленивых)
+- Требуется: MAC-адрес целевого ПК + желательно Broadcast IP (например 192.168.1.255) или знание, что телефон и ПК в одной подсети.
+- Мы добавим: WOL-менеджер (отправка UDP magic packet), настройки (MAC, broadcast, порт), кнопку на главном экране, и права в AndroidManifest.
 
-1. Цели и требования
-- Основная фича: одна большая кнопка "Выключить" — при нажатии:
-  - Показывает подтверждение (dialog).
-  - Если подтверждён — выполняет SSH-команду shutdown на удалённой машине.
-  - Показ статуса (выполняется / успешно / ошибка).
-- Экран настроек для хранения:
-  - host (IP локальной сети)
-  - port (обычно 22)
-  - username
-  - метод аутентификации: password OR private key (рекомендуется key)
-  - опция "sudo без пароля" инструкцию для Ubuntu (если нужен sudo для shutdown)
-- Безопасность:
-  - Данные аутентификации хранятся в зашифрованном виде (EncryptedSharedPreferences / Android Keystore).
-  - По умолчанию подсказки по настройке SSH на Ubuntu.
-- Требования Ubuntu:
-  - Установлен и запущен OpenSSH server (openssh-server).
-  - Пользователь имеет право выполнить shutdown (лучше настроить NOPASSWD для команды shutdown если не хотим вводить пароль).
-- Поддержка: корневой доступ на ПК не нужен, достаточно sudo без пароля или запуск shutdown от root через конфиг sudoers.
+Предусловия (важно)
+1. На целевом компьютере включён Wake-on-LAN в BIOS/UEFI.
+2. Сетевая карта ОС настроена на прием Magic Packet (в Windows — в настройках адаптера/Power Management).
+3. Телефон должен быть в той же локальной сети (подсети) или у нас есть маршрутизатор/сервер, который умеет пересылать magic-пакеты внутрь сети.
+4. Если вы планируете шлёпать пакет через интернет — требуется проброс портов/динамический DNS или использовать SSH-прокси (см. запасной вариант).
 
-2. Технологии и зависимости
-- Язык: Kotlin
-- UI: Jetpack Compose (проект уже выглядит как Compose).
-- Сеть и SSH:
-  - Вариант A (рекомендую): JSch (com.jcraft:jsch:0.1.55) — лёгкая SSH-библиотека для выполнения команд.
-  - Вариант B: sshj (если хочется современней) — потребуется чуть больше конфигов.
-- Хранение секретов: androidx.security:security-crypto (EncryptedSharedPreferences) / Android Keystore.
-- Coroutine scope: kotlinx-coroutines-android для фоновой работы.
-- Material3 для крутой UI: androidx.compose.material3 (если используем M3).
-- Пример зависимостей (app/build.gradle.kts — добавить):
-  - implementation("com.jcraft:jsch:0.1.55")
-  - implementation("androidx.security:security-crypto:1.1.0")
-  - implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.0")
-  - implementation("androidx.compose.material3:material3:<latest>")
+Что нужно от тебя (чётко)
+- MAC-адрес целевого ПК (формат XX:XX:XX:XX:XX:XX). Обязательно.
+- Если знаешь — Broadcast IP подсети (напр., 192.168.1.255) — это ускорит тестирование. Если не знаешь, я попытаюсь вычислить автоматически из Wi-Fi интерфейса.
+- Уточнить: тестировать будем на том же Wi‑Fi, где телефон и ПК? (да/нет)
+- Если телефон в другой сети: SSH-доступ к локальной машине в сети (ip, порт, логин, пароль или ключ) — тогда можно переслать команду через SSH с удалённого хоста.
+- Разрешаешь ли правки манифеста (adds INTERNET и возможно ACCESS_NETWORK_STATE, ACCESS_WIFI_STATE)?
 
-3. Архитектура приложения (вкратце)
-- UI layer (Compose):
-  - MainScreen.kt — большая кнопка, индикатор статуса.
-  - SettingsScreen.kt — поля для host/port/user/auth, кнопка "Сохранить/Тестовый вход".
-  - Dialogs.kt — подтверждение, ошибки.
-- Domain / Network:
-  - SSHManager.kt — класс, инкапсулирует подключение SSH и выполнение команд (использует JSch).
-  - CommandExecutor — обёртка вокруг SSHManager, возвращает результаты (sealed classes Success/Error/Progress).
-- Data:
-  - SettingsRepository — использует EncryptedSharedPreferences для хранения настроек и приватных ключей.
-- ViewModels:
-  - MainViewModel — логика кнопки выключения.
-  - SettingsViewModel — логика сохранения/тестирования соединения.
-- Utils:
-  - SshKeyUtils — помощь при загрузке/конвертации приватного ключа (если потребуется).
-  - Error mapping.
+Детальный план реализации (шаги, приоритеты)
+Шаг 0 — обзор (1 час)
+- Пройтись по SettingsRepository.kt, SettingsViewModel/Screen и SSHManager чтобы понять текущую архитектуру сохранения настроек и как выполняются сетевые операции.
+- Решение: реализовать WOL как отдельный небольшой utility/class (WOLManager.kt) с простым API: sendWake(mac: String, broadcastIp: String?, port: Int = 9)
 
-4. Команды, которые будем выполнять на Ubuntu
-- Простой shutdown (если пользователь имеет право):
-  - sudo shutdown -h now
-- Если у пользователя есть root-доступ (не рекомендую хранить root пароль в приложении).
-- Рекомендация по sudoers: чтобы избежать ввода пароля через sudo, на Ubuntu на машине-получателе:
-  - Создать файл (через root): /etc/sudoers.d/shoutdowner
-  - Добавить строку:
-    username ALL=(ALL) NOPASSWD: /sbin/shutdown
-  - Это позволит пользователю выполнить `sudo /sbin/shutdown -h now` без запроса пароля.
-- Альтернатива (менее безопасно): запуск `echo password | sudo -S shutdown -h now` — НЕ рекомендую (пароль в приложении).
+Шаг 1 — добавление полей в настройки (ниже — файлы)
+- Файлы для правки:
+  - app/src/main/java/com/example/shoutdowner/data/SettingsRepository.kt — добавить хранилище для mac, broadcast, port
+  - app/src/main/java/com/example/shoutdowner/viewmodel/SettingsViewModel.kt (+Factory) — обернуть новые поля в UI
+  - app/src/main/java/com/example/shoutdowner/ui/SettingsScreen.kt — добавить поля ввода: MAC, Broadcast IP (опционально), Port (default 9)
+- Комментарий: использовать уже существующий механизм SharedPreferences / DataStore (как в проекте) — просто расширить.
 
-5. UI / UX идеи (классный дизайн)
-- Главный экран:
-  - Большая красная/градиентная круглая кнопка с иконкой молнии/питания.
-  - Под кнопкой — подпись "Выключить удалённый ПК" и IP адрес (если сохранён).
-  - После нажатия: модальный bottom-sheet / диалог "Точно выключить?" с анимацией.
-  - Во время выполнения — Lottie или progress indicator с текстом "Отправляем команду...".
-  - Успех/ошибка — Snackbar с текстом + toast/small confetti для успеха (опционально).
-- Экран настроек:
-  - Поля ввода с подсказками; переключатель аутентификации Password / Key; кнопка "Тест соединения".
-  - Кнопка "Пример настройки Ubuntu" — открывает инструкцию.
-- Тёмная тема, аккуратные отступы, Material3.
+Шаг 2 — реализовать WOL-менеджер
+- Новый файл:
+  - app/src/main/java/com/example/shoutdowner/wol/WOLManager.kt
+- Что делает:
+  - Формирует magic packet: 6 байт 0xFF + 16 повторов MAC (6 байт).
+  - Открывает DatagramSocket (UDP), устанавливает broadcast=true.
+  - Отправляет DatagramPacket на broadcast-адрес (по умолчанию 255.255.255.255 или вычисленный из Wi-Fi) и порт (обычно 7 или 9; будем по умолчанию ставить 9).
+  - Работает в фоне (kotlin coroutines / Dispatchers.IO) и возвращает успех/ошибку.
+- Дополнительно: реализовать функцию автопоиска broadcast IP если не задан (по информации о WiFiManager/NetworkInterfaces).
 
-6. Детальный пошаговый план задач (milestones)
-Milestone 0 — Подготовка (0.5ч)
-- Проверить текущий проект (он уже Compose).
-- Добавить разрешение INTERNET в AndroidManifest.xml (если ещё нет).
-- Добавить зависимости в app/build.gradle.kts.
+Шаг 3 — привязка к UI / ViewModel
+- Файлы:
+  - app/src/main/java/com/example/shoutdowner/viewmodel/MainViewModel.kt — добавить метод wakeDevice()
+  - app/src/main/java/com/example/shoutdowner/ui/MainScreen.kt — добавить кнопку "Wake" рядом с Shutdown (или отдельную)
+- Поведение:
+  - При нажатии: валидировать MAC (regex), взять broadcast/port из настроек, вызвать WOLManager.sendWake(...)
+  - Показать результат (Toast/Snackbar) — успех или детализированную ошибку.
 
-Milestone 1 — Базовый UI (1.5ч)
-- Создать MainScreen composable: большая кнопка, status.
-- Заготовки ViewModel и навигации в проекте (если нет).
+Шаг 4 — права и манифест
+- Изменить AndroidManifest.xml:
+  - Добавить: <uses-permission android:name="android.permission.INTERNET" />
+  - Рекомендовано (для получения сети/инфы): ACCESS_NETWORK_STATE и ACCESS_WIFI_STATE (если реализуем автоматическое вычисление broadcast)
+  - Если используем multicast (возможно не требуется): CHANGE_WIFI_MULTICAST_STATE и захват MulticastLock при необходимости.
+- Примечание: не нуждаемся в runtime runtime-permissions для этих (не dangerous) — просто добавить в манифест.
 
-Milestone 2 — Экран настроек и хранение (2ч)
-- Создать SettingsScreen, SettingsViewModel.
-- Реализовать SettingsRepository с EncryptedSharedPreferences.
-- UI для ввода приватного ключа (мелкая загрузка файла) или поля пароля.
+Шаг 5 — тестирование
+- Локальный тест:
+  - Подключи телефон к той же Wi-Fi сети.
+  - Укажи MAC в настройках приложения.
+  - Нажми Wake — проверь, включается ли ПК.
+- Диагностика, если не работает:
+  - Уточнить, включён ли WOL в BIOS/OS.
+  - Проверить, отвечает ли роутер на broadcast (некоторые роутеры блокируют 255.255.255.255; тогда нужен directed broadcast 192.168.1.255).
+  - Попробовать отправить пакет с ПК/другого устройства (wakeonlan tool) для подтверждения.
+- Доп. проверка: логирование отправки пакета и ошибок (IOException, SecurityException и пр.).
 
-Milestone 3 — SSHManager (2ч)
-- Реализовать SSHManager на JSch:
-  - Подключение по host/port/username.
-  - Поддержка password или private key (в виде PEM).
-  - Выполнение команды с таймаутом и чтением stderr/stdout.
-- Обрабатывать ошибки (Auth fail / conn timeout / command error).
+Шаг 6 — запасные варианты / fallback
+- Если телефон не в той же сети:
+  - Использовать SSHManager уже в проекте: если у тебя есть доступ к машине внутри LAN (Raspberry Pi, домашний сервер), можем по SSH выполнить утилиту wakeonlan или отправить UDP пакет с той машины.
+  - Потребуется SSH-адрес, учётные данные и команда для отправки пакета (пример: sudo wakeonlan XX:XX:XX:...).
+- Если роутер блокирует broadcast:
+  - Использовать directed broadcast (подсеть.255) или SSH-прокси, либо настроить портфорвардинг на роутере.
 
-Milestone 4 — Интеграция кнопки (1ч)
-- MainViewModel вызывает CommandExecutor, показывает прогресс и результат.
-- При успехе — показать Snackbar "Выключение отправлено".
-- Логирование (для отладки).
-
-Milestone 5 — Тесты и инструкции Ubuntu (0.5–1ч)
-- Добавить инструкцию в приложении (Settings -> Инструкции).
-- Тестирование в LAN с реальной Ubuntu.
-
-Milestone 6 — Полировка дизайна и публикация (1–2ч)
-- Анимации, иконки, тёмная тема.
-- Финальное тестирование, сборка релиза.
-
-7. Безопасность и советы
-- Никогда не хранить пароли в открытом виде — использовать EncryptedSharedPreferences.
-- Предлагать вариант "использовать приватный ключ" — лучший путь.
-- В инструкции для Ubuntu рекомендовать настроить NOPASSWD только на конкретную команду shutdown, не давать полного NOPASSWD на все команды.
-- Если приватный ключ используется — шифровать его и не экспортировать наружу.
-- Не реализовывать передачу пароля через командную подачу в sudo (echo | sudo -S) — fragile и небезопасно.
-
-8. Файлы, которые будут добавлены/изменены
+Файлы, которые предположительно будут изменены/созданы
 - Изменить:
-  - app/src/main/AndroidManifest.xml — добавить permission INTERNET
-  - app/build.gradle.kts — добавить зависимости (JSch, security-crypto, coroutines, material3)
-- Создать:
-  - app/src/main/java/.../ui/MainScreen.kt
-  - app/src/main/java/.../ui/SettingsScreen.kt
-  - app/src/main/java/.../ssh/SSHManager.kt
-  - app/src/main/java/.../data/SettingsRepository.kt
-  - app/src/main/java/.../viewmodel/MainViewModel.kt
-  - app/src/main/java/.../viewmodel/SettingsViewModel.kt
-  - res/layouts / composables при необходимости
-  - plan.md (этот файл)
+  - app/src/main/java/com/example/shoutdowner/data/SettingsRepository.kt (+ добавить ключи/получатели)
+  - app/src/main/java/com/example/shoutdowner/viewmodel/SettingsViewModel.kt
+  - app/src/main/java/com/example/shoutdowner/viewmodel/MainViewModel.kt
+  - app/src/main/java/com/example/shoutdowner/ui/SettingsScreen.kt
+  - app/src/main/java/com/example/shoutdowner/ui/MainScreen.kt
+  - app/src/main/AndroidManifest.xml (permissions)
+- Добавить:
+  - app/src/main/java/com/example/shoutdowner/wol/WOLManager.kt
 
-9. Пример сниппетов (gradle + manifest)
-- AndroidManifest.xml:
-  - Добавить внутри manifest:
-    <uses-permission android:name="android.permission.INTERNET" />
-- app/build.gradle.kts (пример):
-  dependencies {
-    implementation("com.jcraft:jsch:0.1.55") // SSH
-    implementation("androidx.security:security-crypto:1.1.0") // EncryptedSharedPreferences
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.0")
-    implementation("androidx.compose.material3:material3:1.1.0")
-  }
+Пример алгоритма (Kotlin-ish, упрощённо)
+- Формирование magic packet:
+  - bytes = ByteArray(6 + 16*6)
+  - fill first 6 bytes with 0xFF
+  - parse MAC -> 6 bytes
+  - repeat MAC 16 times appended
+- Отправка:
+  - DatagramSocket().use { socket ->
+      socket.broadcast = true
+      val packet = DatagramPacket(bytes, bytes.size, InetAddress.getByName(broadcast), port)
+      socket.send(packet)
+    }
 
-10. Тестирование / чек-лист QA
-- Тест 1: Успешное подключение с приватным ключом, команда выполняется, Ubuntu завершает работу.
-- Тест 2: Неверный пароль/ключ => отображается корректная ошибка.
-- Тест 3: Неправильный хост/порт => таймаут, понятный feedback.
-- Тест 4: Попытка выключения без sudo NOPASSWD => ожидаемо спросит пароль — приложение корректно отработает ошибку.
-- Тест 5: Смена сетей / reconnect — устойчивость.
+Расписание / оценки по времени
+- Анализ + добавление настроек: 0.5-1 день
+- Реализация WOLManager + ViewModel: 0.5 дня
+- UI (Settings + кнопка): 0.5 дня
+- Тесты и исправления: 0.5 дня
+Итого ~1.5-2.5 рабочих дня (в зависимости от нюансов сети и тестов).
 
-11. Доп. фичи (опционально)
-- История команд (когда отправлено, статус).
-- Поддержка нескольких хостов (список ПК).
-- Использование push-уведомлений / REST API прокси — если SSH запрещён, можно установить на Ubuntu маленький HTTP-сервер с auth и endpoint /shutdown (но это уже отдельная штука и менее безопасная).
-- TLS + REST: если захочешь — можно поставить небольшой HTTPS API на ПК и вызывать его с токеном.
+Что от тебя прямо сейчас (коротко)
+1. MAC-адрес целевого ПК.
+2. Подтверждение: телефон и ПК в одной Wi‑Fi сети? (да/нет)
+3. Разрешение на изменение AndroidManifest (добавить INTERNET и т.д.) — ответ «да»/«нет».
+4. Если нет в одной сети — SSH-доступ к машине в той подсети (ip, порт, логин, пароль/ключ) для варианта с прокси.
+5. Желательный порт (по умолчанию 9) или оставить дефолт.
 
-12. Порядок работ / оценка времени
-- Оценка: 7–10 часов для MVP (UI + SSH + settings + тесты).
-- Можно разбить на 2–3 рабочих сессии: UI+settings (1), ssh manager+integration (2), полировка и тесты (3).
-
-13. Требования со стороны Ubuntu (шаги для подготовки)
-- Установить OpenSSH:
-  sudo apt update
-  sudo apt install openssh-server
-- Проверить статус:
-  sudo systemctl status ssh
-- Проверить доступность из LAN: с другого ПК выполнить `ssh username@ip`
-- Настройка sudoers для passwordless shutdown:
-  sudo visudo -f /etc/sudoers.d/shoutdowner
-  Вставить:
-    username ALL=(ALL) NOPASSWD: /sbin/shutdown
-- Проверить команду:
-  ssh username@ip "sudo /sbin/shutdown -h now"  # должно сработать без запроса пароля
-
-14. Следующие шаги (что я сделаю по твоему подтверждению)
-- Если подтверждаешь план — начну реализацию MVP:
-  1) Добавлю INTERNET permission + зависимости.
-  2) Реализую Settings + EncryptedSharedPreferences.
-  3) Реализую SSHManager на JSch.
-  4) Сделаю MainScreen с кнопкой и интеграцией.
-  5) Протестирую и дам инструкции, как настроить Ubuntu.
-
-Если всё ок — кидай "Делай" и я приступаю к реализации. Если хочешь правки в плане — говори, что подправить.
+Если хочешь — могу сразу приступить к реализации (создам WOLManager + добавлю поля в Settings и UI), но для этого мне нужно подтверждение что можно изменять манифест и MAC/нижеописанные данные (или скажи, что оставляем поля пустыми для тебя, чтобы потом заполнить вручную). Продолжим?

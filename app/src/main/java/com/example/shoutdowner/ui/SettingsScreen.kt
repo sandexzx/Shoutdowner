@@ -38,14 +38,21 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.example.shoutdowner.data.SshSettings
+import com.example.shoutdowner.data.WolSettings
+import com.example.shoutdowner.wol.WOLManager
 import com.example.shoutdowner.viewmodel.SettingsViewModel
 import com.example.shoutdowner.viewmodel.TestResult
 import com.example.shoutdowner.viewmodel.SettingsUiState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
     val settingsState by viewModel.settings.collectAsState()
+    val wolSettings by viewModel.wolSettings.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     val testResult by viewModel.testResult.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -56,6 +63,10 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
     var usePassword by remember { mutableStateOf(settingsState.usePassword) }
     var password by remember { mutableStateOf(settingsState.password) }
     var privateKey by remember { mutableStateOf(settingsState.privateKeyPem) }
+
+    var wolMac by remember { mutableStateOf(wolSettings.mac) }
+    var wolBroadcast by remember { mutableStateOf(wolSettings.broadcast) }
+    var wolPort by remember { mutableStateOf(wolSettings.port.toString()) }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // скроллим форму, чтобы на маленьких экранах всё было доступно
@@ -143,7 +154,75 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            Text(text = "Настройки WOL", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    OutlinedTextField(
+                        value = wolMac,
+                        onValueChange = { wolMac = it },
+                        label = { Text("MAC-адрес (AA:BB:CC:DD:EE:FF)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = wolBroadcast,
+                        onValueChange = { wolBroadcast = it },
+                        label = { Text("Broadcast (напр. 192.168.8.255)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = wolPort,
+                        onValueChange = { new -> wolPort = new.filter { ch -> ch.isDigit() } },
+                        label = { Text("Порт (по умолчанию 9)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val coroutineScope = rememberCoroutineScope()
+
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    // save WOL settings
+                    val w = com.example.shoutdowner.data.WolSettings(
+                        mac = wolMac,
+                        broadcast = wolBroadcast,
+                        port = wolPort.toIntOrNull() ?: 9
+                    )
+                    viewModel.updateWolSettings(w)
+                    viewModel.saveWol()
+                }, modifier = Modifier.weight(1f)) {
+                    Text("Сохранить WOL")
+                }
+
+                Button(onClick = {
+                    // send magic packet and show snackbar result
+                    val mac = wolMac
+                    val broadcast = wolBroadcast
+                    val portInt = wolPort.toIntOrNull() ?: 9
+                    coroutineScope.launch {
+                        val sent = withContext(Dispatchers.IO) {
+                            com.example.shoutdowner.wol.WOLManager.sendWake(mac, if (broadcast.isBlank()) null else broadcast, portInt)
+                        }
+                        if (sent) {
+                            snackbarHostState.showSnackbar("Magic packet отправлен")
+                        } else {
+                            snackbarHostState.showSnackbar("Не удалось отправить Magic packet")
+                        }
+                    }
+                }, modifier = Modifier.weight(1f)) {
+                    Text("Отправить Wake")
+                }
                 Button(onClick = {
                     // save
                     val s = SshSettings(

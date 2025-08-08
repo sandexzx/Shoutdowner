@@ -41,6 +41,28 @@ class MainViewModel(private val settingsRepo: SettingsRepository) : ViewModel() 
         }
     }
 
+    fun wakeDevice() {
+        val w = settingsRepo.getWolSettings()
+        if (w.mac.isBlank()) {
+            _uiState.value = UiState.Error("Укажите MAC-адрес в настройках WOL")
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.value = UiState.Loading
+            val success = com.example.shoutdowner.wol.WOLManager.sendWake(
+                w.mac,
+                if (w.broadcast.isBlank()) null else w.broadcast,
+                w.port
+            )
+            if (success) {
+                _uiState.value = UiState.Success("Magic packet отправлен")
+            } else {
+                _uiState.value = UiState.Error("Не удалось отправить Magic packet")
+            }
+        }
+    }
+
     fun resetState() {
         _uiState.value = UiState.Idle
     }

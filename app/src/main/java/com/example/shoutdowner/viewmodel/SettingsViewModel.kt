@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shoutdowner.data.SshSettings
 import com.example.shoutdowner.data.SettingsRepository
+import com.example.shoutdowner.data.WolSettings
 import com.example.shoutdowner.ssh.ExecutionResult
 import com.example.shoutdowner.ssh.SSHManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +32,9 @@ class SettingsViewModel(private val repo: SettingsRepository) : ViewModel() {
     private val _settings = MutableStateFlow<SshSettings>(repo.getSettings())
     val settings: StateFlow<SshSettings> = _settings
 
+    private val _wolSettings = MutableStateFlow<WolSettings>(repo.getWolSettings())
+    val wolSettings: StateFlow<WolSettings> = _wolSettings
+
     private val _uiState = MutableStateFlow<SettingsUiState>(SettingsUiState.Idle)
     val uiState: StateFlow<SettingsUiState> = _uiState
 
@@ -39,10 +43,15 @@ class SettingsViewModel(private val repo: SettingsRepository) : ViewModel() {
 
     fun load() {
         _settings.value = repo.getSettings()
+        _wolSettings.value = repo.getWolSettings()
     }
 
     fun updateSettings(new: SshSettings) {
         _settings.value = new
+    }
+
+    fun updateWolSettings(new: WolSettings) {
+        _wolSettings.value = new
     }
 
     fun save() {
@@ -53,6 +62,18 @@ class SettingsViewModel(private val repo: SettingsRepository) : ViewModel() {
                 _uiState.value = SettingsUiState.Saved("Настройки сохранены")
             } catch (e: Exception) {
                 _uiState.value = SettingsUiState.Error("Ошибка сохранения: ${e.message}")
+            }
+        }
+    }
+
+    fun saveWol() {
+        viewModelScope.launch {
+            _uiState.value = SettingsUiState.Saving
+            try {
+                repo.saveWolSettings(_wolSettings.value)
+                _uiState.value = SettingsUiState.Saved("WOL настройки сохранены")
+            } catch (e: Exception) {
+                _uiState.value = SettingsUiState.Error("Ошибка сохранения WOL: ${e.message}")
             }
         }
     }

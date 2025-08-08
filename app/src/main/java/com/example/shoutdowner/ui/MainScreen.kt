@@ -216,6 +216,20 @@ fun MainScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
                     .padding(horizontal = 36.dp)
             )
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Кнопка Wake (включить) — отправляет magic packet через ViewModel
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                Button(onClick = {
+                    // запускаем в фоне, результат отобразится через uiState -> Snackbar
+                    CoroutineScope(Dispatchers.IO).launch {
+                        viewModel.wakeDevice()
+                    }
+                }) {
+                    Text("Включить")
+                }
+            }
+
             Spacer(modifier = Modifier.weight(1f))
 
             // Snackbar host

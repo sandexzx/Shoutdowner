@@ -13,6 +13,12 @@ data class SshSettings(
     val privateKeyPem: String = ""
 )
 
+data class WolSettings(
+    val mac: String = "",
+    val broadcast: String = "",
+    val port: Int = 9
+)
+
 class SettingsRepository(context: Context) {
 
     private val masterKey = MasterKey.Builder(context)
@@ -34,6 +40,10 @@ class SettingsRepository(context: Context) {
         private const val KEY_USE_PASSWORD = "use_password"
         private const val KEY_PASSWORD = "password"
         private const val KEY_PRIVATE_KEY = "private_key"
+
+        private const val KEY_WOL_MAC = "wol_mac"
+        private const val KEY_WOL_BROADCAST = "wol_broadcast"
+        private const val KEY_WOL_PORT = "wol_port"
     }
 
     fun getSettings(): SshSettings {
@@ -61,6 +71,25 @@ class SettingsRepository(context: Context) {
             .putBoolean(KEY_USE_PASSWORD, s.usePassword)
             .putString(KEY_PASSWORD, s.password)
             .putString(KEY_PRIVATE_KEY, s.privateKeyPem)
+            .apply()
+    }
+
+    fun getWolSettings(): WolSettings {
+        val mac = prefs.getString(KEY_WOL_MAC, "") ?: ""
+        val broadcast = prefs.getString(KEY_WOL_BROADCAST, "") ?: ""
+        val port = prefs.getInt(KEY_WOL_PORT, 9)
+        return WolSettings(
+            mac = mac,
+            broadcast = broadcast,
+            port = port
+        )
+    }
+
+    fun saveWolSettings(w: WolSettings) {
+        prefs.edit()
+            .putString(KEY_WOL_MAC, w.mac)
+            .putString(KEY_WOL_BROADCAST, w.broadcast)
+            .putInt(KEY_WOL_PORT, w.port)
             .apply()
     }
 }
